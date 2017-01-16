@@ -13,9 +13,7 @@ void setup() {
       //Serial.print( "Connected to Wifi, browse to http://");
       //Serial.println( wifi.ip() );
       server.start(); // Time to start the web server
-      IPAddress node_ip = IPAddress(wifi.ip());
-      IPAddress multi_ip = IPAddress(239,255,255,255);
-      Udp.beginMulticast(node_ip, multi_ip, listen_port);
+      startUdp();
     })
     .onChange( false, [] ( int idx, int v, int up  ) {
       //Serial.println( "Lost Wifi connection");
@@ -42,8 +40,5 @@ void loop() {
 
   // automaton run loop for http server
   automaton.run();
-
-  // handle udp discovery packets
-  handleDiscovery();
 
 }

@@ -1,13 +1,15 @@
 #ifndef __MAIN_H
 #define __MAIN_H
+#include <ESPAsyncUDP.h>
 #include <ArduinoOTA.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
-#include <WiFiUdp.h>
 #include <ArduinoJson.h>
 #include <Automaton.h>
 #include <Atm_esp8266.h>
 #include <Adafruit_NeoPixel.h>
+
+
 
 const char* device_name = "test_leds";
 
@@ -20,7 +22,9 @@ char packetBuffer[255]; //buffer to hold incoming packet
 
 
 // udp listen on 2025 for indicate alive.
-WiFiUDP Udp;
+AsyncUDP udp;
+
+
 
 #define PIN D4
 
@@ -157,20 +161,13 @@ String printState(){
   return output;
 }
 
-void handleDiscovery(){
-  int packetSize = Udp.parsePacket();
-  if(packetSize){
-    IPAddress remoteIp = Udp.remoteIP();
-    int len = Udp.read(packetBuffer, 255);
-    if (len > 0) {
-      packetBuffer[len] = 0;
-    }
-    Udp.beginPacket(Udp.remoteIP(), Udp.remotePort());
-    Udp.write(printState().c_str());
-    Udp.endPacket();
+void startUdp(){
+  if(udp.listenMulticast(IPAddress(239,255,255,255), listen_port)){
+     udp.onPacket([](AsyncUDPPacket packet) {
+       packet.printf("%s", printState().c_str());
+     });
   }
 }
-
 
 void configHTTPServer(){
   server.begin()
