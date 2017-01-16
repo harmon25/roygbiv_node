@@ -9,7 +9,7 @@
 #include <Atm_esp8266.h>
 #include <Adafruit_NeoPixel.h>
 
-const char* device_name = "kitchen_bar_leds";
+const char* device_name = "test_leds";
 
 
 const char* ssid = "TPAP";
