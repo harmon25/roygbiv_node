@@ -2,7 +2,7 @@
 
 
 void setup() {
-  //Serial.begin(115200);
+  Serial.begin(115200);
   //Serial.println("Booting");
 
   configHTTPServer();
@@ -14,6 +14,9 @@ void setup() {
       //Serial.println( wifi.ip() );
       server.start(); // Time to start the web server
       startUdp();
+
+      //udp.print("Hello!");
+
     })
     .onChange( false, [] ( int idx, int v, int up  ) {
       //Serial.println( "Lost Wifi connection");
@@ -33,6 +36,10 @@ void loop() {
   // set global current millis referenced in some functions
   currentMillis = millis();
 
+if(currentMillis - previous_beat > heart_beat){
+//  udp.print("Hello!");
+  previous_beat = currentMillis;
+}
   // keep the rainbow going
   if(current_strip_state == 3){
     rainbow();

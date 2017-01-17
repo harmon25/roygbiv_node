@@ -10,34 +10,26 @@
 #include <Adafruit_NeoPixel.h>
 
 
+#define PIN D4
 
+//const char* device_name = "kitchen_bar_leds";
 const char* device_name = "test_leds";
-
 
 const char* ssid = "TPAP";
 const char* password = "zaC2JSLnnxi7";
-
 unsigned int listen_port = 2025;      // local port to listen on - See more at: http://www.esp8266.com/viewtopic.php?f=29&t=4209#sthash.h4KrQKr5.dpuf
-char packetBuffer[255]; //buffer to hold incoming packet
-
-
-// udp listen on 2025 for indicate alive.
-AsyncUDP udp;
-
-
-
-#define PIN D4
-
-Adafruit_NeoPixel strip = Adafruit_NeoPixel(60, PIN, NEO_GRB + NEO_KHZ800);
-Atm_esp8266_httpd_simple server( 80 );
-
 unsigned long currentMillis;
 unsigned long previousMillis = 0;        // will store last time tick was updated
 long interval = 30;           // interval at which to tick
+int heart_beat = 60000;
+unsigned long previous_beat = 0;
+uint16_t current_rainbow_state = 0; // up to 255
 
-uint16_t current_rainbow_state = 0;
+// udp listen on 2025 for indicate alive.
+AsyncUDP udp;
+Adafruit_NeoPixel strip = Adafruit_NeoPixel(60, PIN, NEO_GRB + NEO_KHZ800);
+Atm_esp8266_httpd_simple server( 80 );
 
-uint32_t colour;
 
 uint32_t white = strip.Color(127, 127, 127);
 uint32_t red = strip.Color(255, 0, 0);
@@ -48,15 +40,15 @@ uint32_t purple = strip.Color(128, 0, 128);
 uint32_t yellow = strip.Color(255, 255, 0);
 uint32_t off_led = strip.Color(0, 0, 0);
 
+uint32_t colour = off_led; // start 'off'
+
 // 0 = OFF
 // 1 = SOLID ON
 // 3 = RAINBOW
-unsigned int current_strip_state = 0;
-unsigned int previous_strip_state = 0;
+unsigned int current_strip_state = 0; // start off
+unsigned int previous_strip_state = 0; // previous must me off right?
 
-
-
-
+// function to set the colour of the strip
 void setColour(uint32_t c) {
   previous_strip_state = current_strip_state;
   current_strip_state = 1;
@@ -67,6 +59,8 @@ void setColour(uint32_t c) {
   strip.show();
 }
 
+// function to toggle a strip off
+// retains previous colour or state when turned back 'on'
 void stripOff() {
   previous_strip_state = current_strip_state;
   current_strip_state = 0;
@@ -76,11 +70,15 @@ void stripOff() {
   strip.show();
 }
 
+// toggle led on, retains previous colour or rainbow
 void stripOn() {
   // if we were rainbowing, go back to it
   if(current_strip_state == 0 && previous_strip_state == 3){
       current_strip_state = 3;
   } else {
+      if(colour == off_led){
+        colour = white;
+      }
       // we were just off, turn back on to last color.
       current_strip_state = 1;
       for(uint16_t i=0; i<strip.numPixels(); i++) {
@@ -90,6 +88,7 @@ void stripOn() {
   }
 }
 
+// toggles state to rainbow
 void toggleRainbow(){
   previous_strip_state = current_strip_state;
   // if strip is already rainbowing, turn it off
@@ -101,7 +100,7 @@ void toggleRainbow(){
   }
 }
 
-// used for rainbowing
+// used for rainbowing, rotates around a colour wheel based on 0-255 input
 uint32_t Wheel(byte WheelPos) {
   WheelPos = 255 - WheelPos;
   if(WheelPos < 85) {
@@ -146,6 +145,7 @@ void rainbowCycle(uint8_t wait) {
   }
 }
 
+// returns a json string of the state of the strip
 String printState(){
   StaticJsonBuffer<200> jsonBuffer;
   JsonObject& root = jsonBuffer.createObject();
@@ -161,9 +161,13 @@ String printState(){
   return output;
 }
 
+// state asyncudp server listening for multicast discovery packetS
+// sends back the state
 void startUdp(){
-  if(udp.listenMulticast(IPAddress(239,255,255,255), listen_port)){
+  if(udp.listen(listen_port)){
      udp.onPacket([](AsyncUDPPacket packet) {
+       Serial.println("GOT UDP PACKET -> RESPONDING!");
+
        packet.printf("%s", printState().c_str());
      });
   }
@@ -224,10 +228,14 @@ void configHTTPServer(){
     .onRequest( "/ota", [] ( int idx, int v, int up ) {
       server.send( "Entering OTA Mode" );
       ArduinoOTA.handle();
-      delay(10000);
+      delay(5000);
     })
     .onRequest( "/status", [] ( int idx, int v, int up ) {
       server.send( printState() );
+    })
+    .onRequest( "/reset_device", [] ( int idx, int v, int up ) {
+      server.send( "!!!! Restarting Device !!!!" );
+      ESP.restart();
     })
     .onRequest( "/", [] ( int idx, int v, int up ) {
       server.send(
