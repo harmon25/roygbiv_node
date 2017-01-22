@@ -13,7 +13,7 @@
 #define PIN D4
 
 //const char* device_name = "kitchen_bar_leds";
-const char* device_name = "test_leds";
+String device_name = "test_leds";
 
 const char* ssid = "TPAP";
 const char* password = "zaC2JSLnnxi7";
@@ -185,6 +185,10 @@ void configHTTPServer(){
      setColour(colour);
      server.send( printState() );
     })
+    .onRequest( "/settings", [] ( int idx, int v, int up ) {
+      device_name = server.arg( "name" );
+      server.send( printState() );
+     })
     .onRequest( "/blue", [] ( int idx, int v, int up ) {
       setColour(blue);
       server.send( printState() );
@@ -255,16 +259,14 @@ void configHTTPServer(){
         "</body></html>"
       );
     });
-
 }
-
 
 void configOTA(){
   // Port defaults to 8266
   // ArduinoOTA.setPort(8266);
 
   // Hostname defaults to esp8266-[ChipID]
-  ArduinoOTA.setHostname(device_name);
+  ArduinoOTA.setHostname(device_name.c_str());
 
   // No authentication by default
   ArduinoOTA.setPassword("led_strip");
