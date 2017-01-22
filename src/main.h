@@ -50,9 +50,13 @@ unsigned int previous_strip_state = 0; // previous must me off right?
 
 // function to set the colour of the strip
 void setColour(uint32_t c) {
+  colour = c;
   previous_strip_state = current_strip_state;
   current_strip_state = 1;
-  colour = c;
+  if(colour == off_led){
+    current_strip_state = 0;
+  }
+
   for(uint16_t i=0; i<strip.numPixels(); i++) {
     strip.setPixelColor(i, c);
   }
