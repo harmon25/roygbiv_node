@@ -2,18 +2,21 @@
 
 
 void setup() {
-  Serial.begin(115200);
+  //Serial.begin(115200);
   //Serial.println("Booting");
 
   configHTTPServer();
+
 
 
   wifi.begin( ssid, password )
     .onChange( true, [] ( int idx, int v, int up  ) {
       //Serial.print( "Connected to Wifi, browse to http://");
       //Serial.println( wifi.ip() );
+      ledstrip.init(NUM_LEDS);
       server.start(); // Time to start the web server
       startUdp();
+      startUdp2();
 
       //udp.print("Hello!");
 

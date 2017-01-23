@@ -8,7 +8,20 @@
 #include <Automaton.h>
 #include <Atm_esp8266.h>
 #include <Adafruit_NeoPixel.h>
+#include <ws2812_i2s.h>
 
+// Set to the number of LEDs in your LED strip
+#define NUM_LEDS 60
+// Maximum number of packets to hold in the buffer. Don't change this.
+#define BUFFER_LEN 1024
+// Toggles FPS output (1 = print FPS over serial, 0 = disable output)
+#define PRINT_FPS 1
+
+char packetBuffer[BUFFER_LEN];
+
+// LED strip
+static WS2812 ledstrip;
+static Pixel_t pixels[NUM_LEDS];
 
 #define PIN D4
 
@@ -25,8 +38,9 @@ int heart_beat = 60000;
 unsigned long previous_beat = 0;
 uint16_t current_rainbow_state = 0; // up to 255
 
-// udp listen on 2025 for indicate alive.
+// udp listen on 2025 for pings.
 AsyncUDP udp;
+AsyncUDP udp_music;
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(60, PIN, NEO_GRB + NEO_KHZ800);
 Atm_esp8266_httpd_simple server( 80 );
 
@@ -47,6 +61,17 @@ uint32_t colour = off_led; // start 'off'
 // 3 = RAINBOW
 unsigned int current_strip_state = 0; // start off
 unsigned int previous_strip_state = 0; // previous must me off right?
+
+uint8_t N = 0;
+
+void setColourFast(){
+    for(int i = 0; i < NUM_LEDS; i+=1) {
+       pixels[i].R = 255;
+       pixels[i].G = 0;
+       pixels[i].B = 0;
+    }
+    ledstrip.show(pixels);
+}
 
 // function to set the colour of the strip
 void setColour(uint32_t c) {
@@ -177,6 +202,25 @@ void startUdp(){
   }
 }
 
+void startUdp2(){
+  if(udp_music.listen(7777)){
+     udp_music.onPacket([](AsyncUDPPacket packet) {
+       if(current_strip_state == 4){
+         memcpy(packetBuffer,packet.data(), BUFFER_LEN);
+         //Serial.printf("packetLen: %d\n", packet.length());
+         for(int i = 0; i < packet.length(); i+=4) {
+            packetBuffer[packet.length()] = 0;
+            N = packetBuffer[i];
+            pixels[N].R = (uint8_t)packetBuffer[i+1];
+            pixels[N].G = (uint8_t)packetBuffer[i+2];
+            pixels[N].B = (uint8_t)packetBuffer[i+3];
+         }
+         ledstrip.show(pixels);
+      }
+     });
+  }
+}
+
 void configHTTPServer(){
   server.begin()
     .onRequest( "/custom", [] ( int idx, int v, int up ) {
@@ -193,28 +237,9 @@ void configHTTPServer(){
       device_name = server.arg( "name" );
       server.send( printState() );
      })
-    .onRequest( "/blue", [] ( int idx, int v, int up ) {
-      setColour(blue);
-      server.send( printState() );
-     })
-    .onRequest( "/green", [] ( int idx, int v, int up ) {
-      setColour(green);
-      server.send( printState() );
-    })
     .onRequest( "/red", [] ( int idx, int v, int up ) {
-      setColour(red);
-      server.send( printState() );
-    })
-    .onRequest( "/cyan", [] ( int idx, int v, int up ) {
-      setColour(cyan);
-      server.send( printState() );
-    })
-    .onRequest( "/purple", [] ( int idx, int v, int up ) {
-      setColour(purple);
-      server.send( printState() );
-    })
-    .onRequest( "/yellow", [] ( int idx, int v, int up ) {
-      setColour(yellow);
+      //setColour(red);
+      setColourFast();
       server.send( printState() );
     })
     .onRequest( "/white", [] ( int idx, int v, int up ) {
@@ -231,6 +256,14 @@ void configHTTPServer(){
     })
     .onRequest( "/on", [] ( int idx, int v, int up ) {
       stripOn();
+      server.send( printState() );
+    })
+    .onRequest( "/music", [] ( int idx, int v, int up ) {
+      if( current_strip_state == 4){
+        current_strip_state = 0;
+      } else {
+        current_strip_state = 4;
+      }
       server.send( printState() );
     })
     .onRequest( "/ota", [] ( int idx, int v, int up ) {
@@ -256,6 +289,7 @@ void configHTTPServer(){
         "<a href='cyan'>Cyan</a><br>"
         "<a href='purple'>Purple</a><br>"
         "<a href='rainbow'>Rainbow</a><br>"
+        "<a href='music'>Music</a><br>"
         "<a href='status'>Status</a><br>"
         "<a href='on'>On</a><br>"
         "<a href='off'>Off</a><br>"
