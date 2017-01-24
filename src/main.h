@@ -7,15 +7,13 @@
 #include <ArduinoJson.h>
 #include <Automaton.h>
 #include <Atm_esp8266.h>
-#include <Adafruit_NeoPixel.h>
 #include <ws2812_i2s.h>
 
 // Set to the number of LEDs in your LED strip
 #define NUM_LEDS 60
 // Maximum number of packets to hold in the buffer. Don't change this.
-#define BUFFER_LEN 1024
-// Toggles FPS output (1 = print FPS over serial, 0 = disable output)
-#define PRINT_FPS 1
+// not actually ever holding more than one packet, shrinking this...
+#define BUFFER_LEN 256
 
 char packetBuffer[BUFFER_LEN];
 
@@ -23,168 +21,153 @@ char packetBuffer[BUFFER_LEN];
 static WS2812 ledstrip;
 static Pixel_t pixels[NUM_LEDS];
 
-#define PIN D4
-
-//const char* device_name = "kitchen_bar_leds";
+// some name, can be changed latter via /settings?name=NEW_NAME
 String device_name = "test_leds";
 
-const char* ssid = "TPAP";
-const char* password = "zaC2JSLnnxi7";
+// wifi credentials
+const char* ssid = "*******";
+const char* password = "*********";
+
 unsigned int listen_port = 2025;      // local port to listen on - See more at: http://www.esp8266.com/viewtopic.php?f=29&t=4209#sthash.h4KrQKr5.dpuf
+
 unsigned long currentMillis;
 unsigned long previousMillis = 0;        // will store last time tick was updated
 long interval = 30;           // interval at which to tick
-int heart_beat = 60000;
-unsigned long previous_beat = 0;
 uint16_t current_rainbow_state = 0; // up to 255
 
 // udp listen on 2025 for pings.
 AsyncUDP udp;
+// listen on port 7777 for visualizer packets
 AsyncUDP udp_music;
-Adafruit_NeoPixel strip = Adafruit_NeoPixel(60, PIN, NEO_GRB + NEO_KHZ800);
+
+// automaton httpd server on port 80
 Atm_esp8266_httpd_simple server( 80 );
 
+// colour = {r,g,b}
+//the current solid led colour
+uint8_t cur_colour[3] = {0,0,0};
+// previous colour
+uint8_t prev_colour[3] = {0,0,0};
+// colour used for rainbowing
+uint8_t rainbow_colour[3] = {0,0,0};
 
-uint32_t white = strip.Color(127, 127, 127);
-uint32_t red = strip.Color(255, 0, 0);
-uint32_t green = strip.Color(0, 255, 0);
-uint32_t blue = strip.Color(0, 0, 255);
-uint32_t cyan = strip.Color(0, 255, 255);
-uint32_t purple = strip.Color(128, 0, 128);
-uint32_t yellow = strip.Color(255, 255, 0);
-uint32_t off_led = strip.Color(0, 0, 0);
-
-uint32_t colour = off_led; // start 'off'
+// some static colours
+uint8_t red_c[3] = {255,0,0};
+uint8_t white_c[3] = {255,255,255};
+uint8_t blue_c[3] = {0, 0, 255};
+uint8_t green_c[3] = {0, 255, 0};
+uint8_t cyan_c[3] = {0, 255, 255};
+uint8_t purple_c[3] = {128, 0, 128};
+uint8_t off_c[3] = {0, 0, 0};
 
 // 0 = OFF
 // 1 = SOLID ON
-// 3 = RAINBOW
+// 3 = RAINBOW mode
+// 4 = MUSIC mode
 unsigned int current_strip_state = 0; // start off
 unsigned int previous_strip_state = 0; // previous must me off right?
 
-uint8_t N = 0;
-
-void setColourFast(){
-    for(int i = 0; i < NUM_LEDS; i+=1) {
-       pixels[i].R = 255;
-       pixels[i].G = 0;
-       pixels[i].B = 0;
-    }
-    ledstrip.show(pixels);
+void setColour(uint8_t col[]) {
+  memcpy(prev_colour,cur_colour, 3);
+  for(int i = 0; i < NUM_LEDS; i+=1) {
+     pixels[i].R = col[0];
+     pixels[i].G = col[1];
+     pixels[i].B = col[2];
+  }
+  ledstrip.show(pixels);
+  memcpy(cur_colour, col, 3);
 }
 
-// function to set the colour of the strip
-void setColour(uint32_t c) {
-  colour = c;
-  previous_strip_state = current_strip_state;
-  current_strip_state = 1;
-  if(colour == off_led){
-    current_strip_state = 0;
-  }
-
-  for(uint16_t i=0; i<strip.numPixels(); i++) {
-    strip.setPixelColor(i, c);
-  }
-  strip.show();
+// used for rainbow effect
+void setRainbow(int i){
+   pixels[i].R = rainbow_colour[0];
+   pixels[i].G = rainbow_colour[1];
+   pixels[i].B = rainbow_colour[2];
 }
 
-// function to toggle a strip off
-// retains previous colour or state when turned back 'on'
-void stripOff() {
-  previous_strip_state = current_strip_state;
+void stripOff(){
+  memcpy(prev_colour, cur_colour, 3);
+  previous_strip_state = current_strip_state; // previous must me off right?
   current_strip_state = 0;
-  for(uint16_t i=0; i<strip.numPixels(); i++) {
-    strip.setPixelColor(i, off_led);
-  }
-  strip.show();
+  setColour(off_c);
 }
 
-// toggle led on, retains previous colour or rainbow
-void stripOn() {
-  // if we were rainbowing, go back to it
-  if(current_strip_state == 0 && previous_strip_state == 3){
-      current_strip_state = 3;
-  } else {
-      if(colour == off_led){
-        colour = white;
-      }
-      // we were just off, turn back on to last color.
-      current_strip_state = 1;
-      for(uint16_t i=0; i<strip.numPixels(); i++) {
-        strip.setPixelColor(i, colour);
-      }
-      strip.show();
+void stripOn(){
+  // default on is white
+  if(current_strip_state == 0 && previous_strip_state == 0){
+    setColour(white_c);
+  }
+
+  current_strip_state = previous_strip_state; // previous must me off right?
+  if(previous_strip_state != 3){
+    current_strip_state = 1;
+    setColour(prev_colour);
   }
 }
 
 // toggles state to rainbow
-void toggleRainbow(){
+void toggleState(int s){
   previous_strip_state = current_strip_state;
   // if strip is already rainbowing, turn it off
-  if(current_strip_state == 3){
+  if(current_strip_state == s){
     current_strip_state = 0;
   // else we are on some other state, so switch to rainbowing
   } else {
-    current_strip_state = 3;
+    current_strip_state = s;
   }
 }
 
-// used for rainbowing, rotates around a colour wheel based on 0-255 input
-uint32_t Wheel(byte WheelPos) {
+// used for rainbowing, rotates around a cur_colour wheel based on 0-255 input
+void Wheel(byte WheelPos) {
   WheelPos = 255 - WheelPos;
   if(WheelPos < 85) {
-    return strip.Color(255 - WheelPos * 3, 0, WheelPos * 3);
-  }
-  if(WheelPos < 170) {
+    //{255 - WheelPos * 3, 0, WheelPos * 3 }
+    rainbow_colour[0] = 255 - WheelPos * 3;
+    rainbow_colour[1] = 0;
+    rainbow_colour[2] = WheelPos * 3;
+  } else if (WheelPos < 170) {
     WheelPos -= 85;
-    return strip.Color(0, WheelPos * 3, 255 - WheelPos * 3);
+    // {0, WheelPos * 3, 255 - WheelPos * 3 }
+    rainbow_colour[0] = 0;
+    rainbow_colour[1] = WheelPos * 3;
+    rainbow_colour[2] = 255 - WheelPos * 3;
+  } else {
+    WheelPos -= 170;
+    // {WheelPos * 3,255 - WheelPos * 3, 0 }
+    rainbow_colour[0] = WheelPos * 3;
+    rainbow_colour[1] = 255 - WheelPos * 3;
+    rainbow_colour[2] = 0;
   }
-  WheelPos -= 170;
-  return strip.Color(WheelPos * 3, 255 - WheelPos * 3, 0);
 }
 
 void rainbow() {
-  uint16_t i;
-  // restart rainbow
-  if(current_rainbow_state > 255){
-    current_rainbow_state = 0;
-  }
-
   if(currentMillis - previousMillis > interval){
-    for(i=0; i<strip.numPixels(); i++) {
-      strip.setPixelColor(i, Wheel((i+current_rainbow_state) & 255));
+    for(int i=0; i<NUM_LEDS; i++) {
+      Wheel((i+current_rainbow_state) & 255);
+      setRainbow(i);
     }
     current_rainbow_state ++;
     previousMillis = currentMillis;
-    strip.show();
-  }
-}
-
-
-// Slightly different, this makes the rainbow equally distributed throughout
-void rainbowCycle(uint8_t wait) {
-  uint16_t i, j;
-
-  for(j=0; j<256*5; j++) { // 5 cycles of all colors on wheel
-    for(i=0; i< strip.numPixels(); i++) {
-      strip.setPixelColor(i, Wheel(((i * 256 / strip.numPixels()) + j) & 255));
-    }
-    strip.show();
-    delay(wait);
+    ledstrip.show(pixels);
   }
 }
 
 // returns a json string of the state of the strip
 String printState(){
-  StaticJsonBuffer<200> jsonBuffer;
+  StaticJsonBuffer<250> jsonBuffer;
   JsonObject& root = jsonBuffer.createObject();
-  String c = String(colour, HEX);
-  c.toUpperCase();
 
-  root["hex"] = c;
-  root["int"] = colour;
   root["state"] = current_strip_state;
   root["device"] = device_name;
+  JsonArray& crgb = root.createNestedArray("c_rgb");
+  crgb.add(cur_colour[0]);
+  crgb.add(cur_colour[1]);
+  crgb.add(cur_colour[2]);
+  JsonArray& prgb = root.createNestedArray("p_rgb");
+  prgb.add(prev_colour[0]);
+  prgb.add(prev_colour[1]);
+  prgb.add(prev_colour[2]);
+
   String output;
   root.printTo(output);
   return output;
@@ -192,7 +175,7 @@ String printState(){
 
 // state asyncudp server listening for multicast discovery packetS
 // sends back the state
-void startUdp(){
+void startUdpForPong(){
   if(udp.listen(listen_port)){
      udp.onPacket([](AsyncUDPPacket packet) {
        Serial.println("GOT UDP PACKET -> RESPONDING!");
@@ -202,20 +185,21 @@ void startUdp(){
   }
 }
 
-void startUdp2(){
+uint8_t N = 0; // designates the pixel to alter with a visualizer packet
+
+void startUdpForVisualizer(){
   if(udp_music.listen(7777)){
      udp_music.onPacket([](AsyncUDPPacket packet) {
        if(current_strip_state == 4){
-         memcpy(packetBuffer,packet.data(), BUFFER_LEN);
-         //Serial.printf("packetLen: %d\n", packet.length());
-         for(int i = 0; i < packet.length(); i+=4) {
+          memcpy(packetBuffer,packet.data(), packet.length());
+          for(int i = 0; i < packet.length(); i+=4) {
             packetBuffer[packet.length()] = 0;
             N = packetBuffer[i];
             pixels[N].R = (uint8_t)packetBuffer[i+1];
             pixels[N].G = (uint8_t)packetBuffer[i+2];
             pixels[N].B = (uint8_t)packetBuffer[i+3];
          }
-         ledstrip.show(pixels);
+          ledstrip.show(pixels);
       }
      });
   }
@@ -224,30 +208,51 @@ void startUdp2(){
 void configHTTPServer(){
   server.begin()
     .onRequest( "/custom", [] ( int idx, int v, int up ) {
-     int r = server.arg( "r" ).toInt();
-     int g = server.arg( "g" ).toInt();
-     int b = server.arg( "b" ).toInt();
-     String msg = String("Set colour: R="+String(r) + " G=" + String(g) + " B=" + String(b));
-
-     colour = strip.Color(r, g, b);
-     setColour(colour);
+     cur_colour[0] = server.arg( "r" ).toInt();
+     cur_colour[1] = server.arg( "g" ).toInt();
+     cur_colour[2] = server.arg( "b" ).toInt();
+     // this mutates r, g, b
+     //String msg = String("Set cur_colour: R="+String(r) + " G=" + String(g) + " B=" + String(b));
+     current_strip_state = 1;
+     setColour(cur_colour);
      server.send( printState() );
     })
     .onRequest( "/settings", [] ( int idx, int v, int up ) {
       device_name = server.arg( "name" );
       server.send( printState() );
      })
+     .onRequest( "/blue", [] ( int idx, int v, int up ) {
+       current_strip_state = 1;
+       setColour(blue_c);
+       server.send( printState() );
+     })
     .onRequest( "/red", [] ( int idx, int v, int up ) {
-      //setColour(red);
-      setColourFast();
+      current_strip_state = 1;
+      setColour(red_c);
       server.send( printState() );
     })
     .onRequest( "/white", [] ( int idx, int v, int up ) {
-       setColour(white);
+       current_strip_state = 1;
+       setColour(white_c);
+       server.send( printState() );
+    })
+    .onRequest( "/cyan", [] ( int idx, int v, int up ) {
+       current_strip_state = 1;
+       setColour(cyan_c);
+       server.send( printState() );
+    })
+    .onRequest( "/purple", [] ( int idx, int v, int up ) {
+       current_strip_state = 1;
+       setColour(purple_c);
+       server.send( printState() );
+    })
+    .onRequest( "/green", [] ( int idx, int v, int up ) {
+       current_strip_state = 1;
+       setColour(green_c);
        server.send( printState() );
     })
     .onRequest( "/rainbow", [] ( int idx, int v, int up ) {
-       toggleRainbow();
+       toggleState(3);
        server.send( printState() );
     })
     .onRequest( "/off", [] ( int idx, int v, int up ) {
@@ -259,11 +264,7 @@ void configHTTPServer(){
       server.send( printState() );
     })
     .onRequest( "/music", [] ( int idx, int v, int up ) {
-      if( current_strip_state == 4){
-        current_strip_state = 0;
-      } else {
-        current_strip_state = 4;
-      }
+      toggleState(4);
       server.send( printState() );
     })
     .onRequest( "/ota", [] ( int idx, int v, int up ) {
@@ -285,7 +286,6 @@ void configHTTPServer(){
         "<a href='red'>Red</a><br>"
         "<a href='blue'>Blue</a><br>"
         "<a href='green'>Green</a><br>"
-        "<a href='yellow'>Yellow</a><br>"
         "<a href='cyan'>Cyan</a><br>"
         "<a href='purple'>Purple</a><br>"
         "<a href='rainbow'>Rainbow</a><br>"
