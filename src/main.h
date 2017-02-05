@@ -1,108 +1,86 @@
 #ifndef __MAIN_H
 #define __MAIN_H
-#include <ESPAsyncUDP.h>
 #include <ArduinoOTA.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
 #include <ArduinoJson.h>
 #include <Automaton.h>
 #include <Atm_esp8266.h>
-#include <ws2812_i2s.h>
+#include <NeoPixelBus.h>
+#include <WiFiUdp.h>
+
+char magicPacket[] = "ESP8266 DISCOVERY";
 
 // Set to the number of LEDs in your LED strip
-#define NUM_LEDS 60
+#define NUM_LEDS 116
 // Maximum number of packets to hold in the buffer. Don't change this.
-// not actually ever holding more than one packet, shrinking this...
-#define BUFFER_LEN 256
+// need atleast 4*NUM_LEDS bytes LEDs
+#define BUFFER_LEN 1024
 
 char packetBuffer[BUFFER_LEN];
 
-// LED strip
-static WS2812 ledstrip;
-static Pixel_t pixels[NUM_LEDS];
+NeoPixelBus<NeoGrbFeature, Neo800KbpsMethod> strip(NUM_LEDS);
 
 // some name, can be changed latter via /settings?name=NEW_NAME
 String device_name = "test_leds";
 
 // wifi credentials
-const char* ssid = "*******";
-const char* password = "*********";
+const char* ssid = "**********";
+const char* password = "**********";
 
-unsigned int listen_port = 2025;      // local port to listen on - See more at: http://www.esp8266.com/viewtopic.php?f=29&t=4209#sthash.h4KrQKr5.dpuf
+unsigned int localPort = 7777;
 
 unsigned long currentMillis;
 unsigned long previousMillis = 0;        // will store last time tick was updated
 long interval = 30;           // interval at which to tick
 uint16_t current_rainbow_state = 0; // up to 255
-
-// udp listen on 2025 for pings.
-AsyncUDP udp;
-// listen on port 7777 for visualizer packets
-AsyncUDP udp_music;
-
+// udp server for visualization
+WiFiUDP port;
 // automaton httpd server on port 80
 Atm_esp8266_httpd_simple server( 80 );
 
-// colour = {r,g,b}
-//the current solid led colour
-uint8_t cur_colour[3] = {0,0,0};
-// previous colour
-uint8_t prev_colour[3] = {0,0,0};
-// colour used for rainbowing
-uint8_t rainbow_colour[3] = {0,0,0};
+RgbColor red(255, 0, 0);
+RgbColor green(0, 255, 0);
+RgbColor blue(0, 0, 255);
+RgbColor white(255);
+RgbColor black(0);
 
-// some static colours
-uint8_t red_c[3] = {255,0,0};
-uint8_t white_c[3] = {255,255,255};
-uint8_t blue_c[3] = {0, 0, 255};
-uint8_t green_c[3] = {0, 255, 0};
-uint8_t cyan_c[3] = {0, 255, 255};
-uint8_t purple_c[3] = {128, 0, 128};
-uint8_t off_c[3] = {0, 0, 0};
-
+uint8_t N = 0; // designates the pixel to alter with a visualizer packet
+RgbColor prev_colour;
+RgbColor colour;
+RgbColor rainbow_colour;
+RgbColor v_colour;
 // 0 = OFF
 // 1 = SOLID ON
 // 3 = RAINBOW mode
 // 4 = MUSIC mode
+// 10 = OTA
 unsigned int current_strip_state = 0; // start off
 unsigned int previous_strip_state = 0; // previous must me off right?
 
-void setColour(uint8_t col[]) {
-  memcpy(prev_colour,cur_colour, 3);
-  for(int i = 0; i < NUM_LEDS; i+=1) {
-     pixels[i].R = col[0];
-     pixels[i].G = col[1];
-     pixels[i].B = col[2];
-  }
-  ledstrip.show(pixels);
-  memcpy(cur_colour, col, 3);
+// Sends a UDP reply packet to the sender
+void sendReply(String message) {
+    port.beginPacket(port.remoteIP(), port.remotePort());
+    port.write(message.c_str());
+    port.endPacket();
+
 }
 
-// used for rainbow effect
-void setRainbow(int i){
-   pixels[i].R = rainbow_colour[0];
-   pixels[i].G = rainbow_colour[1];
-   pixels[i].B = rainbow_colour[2];
+void setColour() {
+  for(int i = 0; i < NUM_LEDS; i+=1) {
+  strip.SetPixelColor(i, colour);
+  }
+  strip.Show();
 }
 
 void stripOff(){
-  memcpy(prev_colour, cur_colour, 3);
-  previous_strip_state = current_strip_state; // previous must me off right?
+  previous_strip_state = current_strip_state;
   current_strip_state = 0;
-  setColour(off_c);
-}
-
-void stripOn(){
-  // default on is white
-  if(current_strip_state == 0 && previous_strip_state == 0){
-    setColour(white_c);
+  colour = black;
+  for(int i = 0; i < NUM_LEDS; i+=1) {
+  strip.SetPixelColor(i, colour);
   }
-
-  current_strip_state = previous_strip_state; // previous must me off right?
-  if(previous_strip_state != 3){
-    current_strip_state = 1;
-    setColour(prev_colour);
-  }
+  strip.Show();
 }
 
 // toggles state to rainbow
@@ -122,33 +100,33 @@ void Wheel(byte WheelPos) {
   WheelPos = 255 - WheelPos;
   if(WheelPos < 85) {
     //{255 - WheelPos * 3, 0, WheelPos * 3 }
-    rainbow_colour[0] = 255 - WheelPos * 3;
-    rainbow_colour[1] = 0;
-    rainbow_colour[2] = WheelPos * 3;
+    rainbow_colour.R = 255 - WheelPos * 3;
+    rainbow_colour.G = 0;
+    rainbow_colour.B = WheelPos * 3;
   } else if (WheelPos < 170) {
     WheelPos -= 85;
     // {0, WheelPos * 3, 255 - WheelPos * 3 }
-    rainbow_colour[0] = 0;
-    rainbow_colour[1] = WheelPos * 3;
-    rainbow_colour[2] = 255 - WheelPos * 3;
+    rainbow_colour.R = 0;
+    rainbow_colour.G = WheelPos * 3;
+    rainbow_colour.B = 255 - WheelPos * 3;
   } else {
     WheelPos -= 170;
     // {WheelPos * 3,255 - WheelPos * 3, 0 }
-    rainbow_colour[0] = WheelPos * 3;
-    rainbow_colour[1] = 255 - WheelPos * 3;
-    rainbow_colour[2] = 0;
+    rainbow_colour.R = WheelPos * 3;
+    rainbow_colour.G = 255 - WheelPos * 3;
+    rainbow_colour.B = 0;
   }
 }
 
-void rainbow() {
+void handleRainbow() {
   if(currentMillis - previousMillis > interval){
     for(int i=0; i<NUM_LEDS; i++) {
       Wheel((i+current_rainbow_state) & 255);
-      setRainbow(i);
+      strip.SetPixelColor(i,rainbow_colour);
     }
     current_rainbow_state ++;
     previousMillis = currentMillis;
-    ledstrip.show(pixels);
+    strip.Show();
   }
 }
 
@@ -160,96 +138,95 @@ String printState(){
   root["state"] = current_strip_state;
   root["device"] = device_name;
   JsonArray& crgb = root.createNestedArray("c_rgb");
-  crgb.add(cur_colour[0]);
-  crgb.add(cur_colour[1]);
-  crgb.add(cur_colour[2]);
+  crgb.add(colour.R);
+  crgb.add(colour.G);
+  crgb.add(colour.B);
   JsonArray& prgb = root.createNestedArray("p_rgb");
-  prgb.add(prev_colour[0]);
-  prgb.add(prev_colour[1]);
-  prgb.add(prev_colour[2]);
+  prgb.add(prev_colour.R);
+  prgb.add(prev_colour.G);
+  prgb.add(prev_colour.B);
 
   String output;
   root.printTo(output);
   return output;
 }
 
-// state asyncudp server listening for multicast discovery packetS
-// sends back the state
-void startUdpForPong(){
-  if(udp.listen(listen_port)){
-     udp.onPacket([](AsyncUDPPacket packet) {
-       Serial.println("GOT UDP PACKET -> RESPONDING!");
+void handleVisualization() {
+  uint16_t packetSize = port.parsePacket();
 
-       packet.printf("%s", printState().c_str());
-     });
-  }
-}
+   // Prevent a crash and buffer overflow
+   if (packetSize > BUFFER_LEN) {
+       sendReply("ERR BUFFER OVF");
+       return;
+   }
 
-uint8_t N = 0; // designates the pixel to alter with a visualizer packet
+   if (packetSize) {
+       uint16_t len = port.read(packetBuffer, BUFFER_LEN);
 
-void startUdpForVisualizer(){
-  if(udp_music.listen(7777)){
-     udp_music.onPacket([](AsyncUDPPacket packet) {
-       if(current_strip_state == 4){
-          memcpy(packetBuffer,packet.data(), packet.length());
-          for(int i = 0; i < packet.length(); i+=4) {
-            packetBuffer[packet.length()] = 0;
-            N = packetBuffer[i];
-            pixels[N].R = (uint8_t)packetBuffer[i+1];
-            pixels[N].G = (uint8_t)packetBuffer[i+2];
-            pixels[N].B = (uint8_t)packetBuffer[i+3];
-         }
-          ledstrip.show(pixels);
-      }
-     });
-  }
+       // Check for a magic packet discovery broadcast
+       if (!strcmp(packetBuffer, magicPacket)) {
+           char reply[50];
+           sprintf(reply, "ESP8266 ACK LEDS %i", NUM_LEDS);
+           sendReply(reply);
+           return;
+       }
+
+       // Decode byte sequence and display on LED strip
+       N = 0;
+       packetBuffer[len] = 0;
+       for(uint16_t i = 0; i < len; i+=4) {
+           N = (uint8_t)packetBuffer[i];
+
+           if (N >= NUM_LEDS) {
+               return;
+           }
+           v_colour.R = (uint8_t)packetBuffer[i+1];
+           v_colour.G = (uint8_t)packetBuffer[i+2];
+           v_colour.B = (uint8_t)packetBuffer[i+3];
+           strip.SetPixelColor(N, v_colour);
+       }
+   }
+   strip.Show();
 }
 
 void configHTTPServer(){
   server.begin()
     .onRequest( "/custom", [] ( int idx, int v, int up ) {
-     cur_colour[0] = server.arg( "r" ).toInt();
-     cur_colour[1] = server.arg( "g" ).toInt();
-     cur_colour[2] = server.arg( "b" ).toInt();
-     // this mutates r, g, b
-     //String msg = String("Set cur_colour: R="+String(r) + " G=" + String(g) + " B=" + String(b));
+     prev_colour = colour;
+     colour.R = server.arg( "r" ).toInt();
+     colour.G = server.arg( "g" ).toInt();
+     colour.B = server.arg( "b" ).toInt();
      current_strip_state = 1;
-     setColour(cur_colour);
+     setColour();
      server.send( printState() );
     })
     .onRequest( "/settings", [] ( int idx, int v, int up ) {
       device_name = server.arg( "name" );
       server.send( printState() );
      })
+     .onRequest( "/white", [] ( int idx, int v, int up ) {
+       current_strip_state = 1;
+       colour = white;
+       setColour();
+       server.send( printState() );
+     })
      .onRequest( "/blue", [] ( int idx, int v, int up ) {
        current_strip_state = 1;
-       setColour(blue_c);
+       colour = blue;
+       setColour();
        server.send( printState() );
      })
     .onRequest( "/red", [] ( int idx, int v, int up ) {
       current_strip_state = 1;
-      setColour(red_c);
+      colour = red;
+      setColour();
       server.send( printState() );
     })
-    .onRequest( "/white", [] ( int idx, int v, int up ) {
-       current_strip_state = 1;
-       setColour(white_c);
-       server.send( printState() );
-    })
-    .onRequest( "/cyan", [] ( int idx, int v, int up ) {
-       current_strip_state = 1;
-       setColour(cyan_c);
-       server.send( printState() );
-    })
-    .onRequest( "/purple", [] ( int idx, int v, int up ) {
-       current_strip_state = 1;
-       setColour(purple_c);
-       server.send( printState() );
-    })
     .onRequest( "/green", [] ( int idx, int v, int up ) {
-       current_strip_state = 1;
-       setColour(green_c);
-       server.send( printState() );
+      current_strip_state = 1;
+      colour = green;
+      setColour();
+      server.send( printState() );
     })
     .onRequest( "/rainbow", [] ( int idx, int v, int up ) {
        toggleState(3);
@@ -257,10 +234,6 @@ void configHTTPServer(){
     })
     .onRequest( "/off", [] ( int idx, int v, int up ) {
       stripOff();
-      server.send( printState() );
-    })
-    .onRequest( "/on", [] ( int idx, int v, int up ) {
-      stripOn();
       server.send( printState() );
     })
     .onRequest( "/music", [] ( int idx, int v, int up ) {
@@ -284,14 +257,11 @@ void configHTTPServer(){
         "<!DOCTYPE html><html><body>"
         "<a href='white'>White</a><br>"
         "<a href='red'>Red</a><br>"
-        "<a href='blue'>Blue</a><br>"
         "<a href='green'>Green</a><br>"
-        "<a href='cyan'>Cyan</a><br>"
-        "<a href='purple'>Purple</a><br>"
+        "<a href='blue'>Blue</a><br>"
         "<a href='rainbow'>Rainbow</a><br>"
         "<a href='music'>Music</a><br>"
         "<a href='status'>Status</a><br>"
-        "<a href='on'>On</a><br>"
         "<a href='off'>Off</a><br>"
         "<a href='ota'>OTA</a><br>"
         "</body></html>"

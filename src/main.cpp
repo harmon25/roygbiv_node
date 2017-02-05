@@ -2,7 +2,7 @@
 
 
 void setup() {
-  Serial.begin(115200);
+//  Serial.begin(115200);
 
   configHTTPServer();
 
@@ -10,10 +10,17 @@ void setup() {
     .onChange( true, [] ( int idx, int v, int up  ) {
       //Serial.print( "Connected to Wifi, browse to http://");
       //Serial.println( wifi.ip() );
-      ledstrip.init(NUM_LEDS);
+      strip.Begin();
+      strip.Show();
+
+      port.begin(localPort);
+
+
+    //  ledstrip.init(NUM_LEDS);
       server.start(); // Time to start the web server
-      startUdpForPong();
-      startUdpForVisualizer();
+
+      //startUdpForPong();
+      //startUdpForVisualizer();
 
     })
     .onChange( false, [] ( int idx, int v, int up  ) {
@@ -33,13 +40,16 @@ void setup() {
 void loop() {
   // set global current millis referenced in some functions
   currentMillis = millis();
+  // automaton run loop for http server
+  automaton.run();
 
   // keep the rainbow going
   if(current_strip_state == 3){
-    rainbow();
+    handleRainbow();
+  } else if(current_strip_state == 4) {
+    handleVisualization();
   }
 
-  // automaton run loop for http server
-  automaton.run();
+
 
 }
